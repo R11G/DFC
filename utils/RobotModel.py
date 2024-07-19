@@ -6,9 +6,10 @@ import pytorch_kinematics as pk
 import pytorch_volumetric as pv
 
 class RobotModel:
-    def __init__(self, path='data/bhand_model/robots/bhand_model.URDF'):
+    def __init__(self, path='utils/bhand_model/robots/bhand_model.URDF'):
         self.path = path
-        self.device = torch.device('cuda')
+        d = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.device = torch.device(d)
         device = self.device
         chain = pk.build_chain_from_urdf(open(path).read())
         chain = chain.to(device=device)

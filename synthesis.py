@@ -1,11 +1,8 @@
 import argparse
-import os
 import random
 
 import numpy as np
 import torch
-import trimesh as tm
-
 parser = argparse.ArgumentParser()
 parser.add_argument('--batch_size', default=1024, type=int)
 parser.add_argument('--n_contact', default=5, type=int)
@@ -18,7 +15,7 @@ parser.add_argument('--hprior_weight', default=1, type=float)
 parser.add_argument('--noise_size', default=0.1, type=float)
 parser.add_argument('--output_dir', default='synthesis', type=str)
 args = parser.parse_args()
-
+d = 'cuda' if torch.cuda.is_available() else 'cpu'
 # set random seeds
 np.seterr(all='raise')
 random.seed(0)
@@ -46,8 +43,8 @@ physics_guide = PhysicsGuide(mesh_model, robot_model, penetration_model, fc_loss
 
 accept_history = []
 
-z = torch.normal(0, 1, [args.batch_size, robot_model.code_length], device='cuda', dtype=torch.float32, requires_grad=True)
-contact_point_indices = torch.randint(0, mesh_model.n_pts, [args.batch_size, args.n_contact], device='cuda', dtype=torch.long)
+z = torch.normal(0, 1, [args.batch_size, robot_model.code_length], device=d, dtype=torch.float32, requires_grad=True)
+contact_point_indices = torch.randint(0, mesh_model.n_pts, [args.batch_size, args.n_contact], device=d, dtype=torch.long)
 
 # optimize hand pose and contact map using physics guidance
 energy, grad, verbose_energy = physics_guide.initialize(z, contact_point_indices)
@@ -56,23 +53,25 @@ accept = ((force_closure < 0.5) * (penetration < 0.02) * (surface_distance < 0.0
 for physics_step in range(args.max_physics):
     energy, grad, z, contact_point_indices, verbose_energy = physics_guide.optimize(energy, grad, z, contact_point_indices, verbose_energy)
     linear_independence, force_closure, surface_distance, penetration, z_norm, normal_alignment = verbose_energy
+    val = (force_closure + penetration + surface_distance).float()
     accept = ((force_closure < 0.5) * (penetration < 0.02) * (surface_distance < 0.02)).float()
     _accept = accept.sum().detach().cpu().numpy()
     accept_history.append(_accept)
     if physics_step % 100 == 0:
-        print('optimize', physics_step, _accept)
+        print('optimize', physics_step, _accept, val)
 
 for refinement_step in range(args.max_refine):
     energy, grad, z, contact_point_indices, verbose_energy = physics_guide.refine(energy, grad, z, contact_point_indices, verbose_energy)
     linear_independence, force_closure, surface_distance, penetration, z_norm, normal_alignment = verbose_energy
+    val = (force_closure + penetration + surface_distance).float()
     accept = ((force_closure < 0.5) * (penetration < 0.02) * (surface_distance < 0.02)).float()
     _accept = accept.sum().detach().cpu().numpy()
     accept_history.append(_accept)
     if refinement_step % 100 == 0:
-        print('refine', refinement_step, _accept)
+        print('refine', refinement_step, _accept, val)
 
 
-os.makedirs('%s/%s-%s-%d-%d'%(args.output_dir, args.hand_model, args.obj_model, args.n_contact, args.batch_size), exist_ok=True)
+#os.makedirs('%s/%s-%s-%d-%d'%(args.output_dir, args.hand_model, args.obj_model, args.n_contact, args.batch_size), exist_ok=True)
 # TODO: find new visualization tool to replace below
 """
 for a in torch.where(accept)[0]:

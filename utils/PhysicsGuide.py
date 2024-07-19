@@ -12,9 +12,10 @@ class PhysicsGuide:
         self.fc_loss_model = fc_loss_model
         self.args = args
         self.grad_ema = EMA(0.98)
-        self.ones = torch.ones([self.args.batch_size, self.hand_model.num_points], device='cuda') # B x V
-        self.arange = torch.arange(self.args.batch_size).cuda()
-        self.rejection_count = torch.zeros([self.args.batch_size, 1], device='cuda', dtype=torch.long)
+        self.d = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.ones = torch.ones([self.args.batch_size, self.hand_model.n_pts], device=self.d) # B x V
+        self.arange = torch.arange(self.args.batch_size).to(self.d)
+        self.rejection_count = torch.zeros([self.args.batch_size, 1], device=self.d, dtype=torch.long)
 
     def initialize(self, z, contact_point_indices):
         linear_independence, force_closure, surface_distance, penetration, z_norm, normal_alignment = self.compute_energy(z, contact_point_indices, verbose=True)
@@ -38,7 +39,7 @@ class PhysicsGuide:
         linear_independence, force_closure = self.fc_loss_model.fc_loss(contact_point, contact_normal)
         surface_distance = self.fc_loss_model.dist_loss(contact_point,z)
         penetration = self.penetration_model.get_penetration(z) * 10  # B x V
-        hand_prior = self.hand_model.prior(z) * self.args.hprior_weight
+        hand_prior = self.object_model.prior(z) * self.args.hprior_weight
         if verbose:
             return linear_independence, force_closure, surface_distance.sum(1), penetration.sum(1), hand_prior, normal_alignment
         else:
@@ -55,9 +56,9 @@ class PhysicsGuide:
         batch_size = len(energy)
         step_size = self.get_stepsize(energy)
         temperature = self.get_temperature(energy)
-        switch = torch.rand([batch_size, 1], device='cuda')
+        switch = torch.rand([batch_size, 1], device=self.d)
         # update z by langevin
-        noise = torch.normal(mean=0, std=self.args.noise_size, size=z.shape, device='cuda', dtype=torch.float) * step_size
+        noise = torch.normal(mean=0, std=self.args.noise_size, size=z.shape, device=self.d, dtype=torch.float) * step_size
         new_z = z - 0.5 * grad / self.grad_ema.average.unsqueeze(0) * step_size * step_size + noise
         # linear_independence, force_closure, surface_distance, penetration, hand_prior, normal_alignment = self.compute_energy(object_code, new_z, contact_point_indices, verbose=True)
         # print('linear_independence', linear_independence.mean().detach().cpu().numpy())
@@ -69,17 +70,17 @@ class PhysicsGuide:
         # exit()
         # update contact point by random sampling
         new_contact_point_indices = contact_point_indices.clone()
-        update_indices = torch.randint(0, self.args.n_contact, size=[self.args.batch_size], device='cuda')
+        update_indices = torch.randint(0, self.args.n_contact, size=[self.args.batch_size], device=self.d)
         prob = self.ones.clone()
         prob[torch.unsqueeze(self.arange, 1), contact_point_indices] = 0
         # sample update_to indices
         """if self.args.hand_model == 'mano_fingertip':
-            update_to = torch.randint(0, self.hand_model.num_fingertips, size=[self.args.batch_size], device='cuda')
+            update_to = torch.randint(0, self.hand_model.num_fingertips, size=[self.args.batch_size], device=self.d)
             update_to = self.hand_model.fingertip_indices[update_to]
         else:"""
         # unsure of diff
         # i think old num points of handmodel is equiv to n pts of mesh pcd?
-        update_to = torch.randint(0, self.hand_model.n_pts, size=[self.args.batch_size], device='cuda')
+        update_to = torch.randint(0, self.hand_model.n_pts, size=[self.args.batch_size], device=self.d)
         new_contact_point_indices[self.arange, update_indices] = update_to
         # merge by switch
         update_H = ((switch < self.args.langevin_probability) * (self.rejection_count < 2))
@@ -92,7 +93,7 @@ class PhysicsGuide:
         # accept by Metropolis-Hasting algorithm
         with torch.no_grad():
             # metropolis-hasting
-            alpha = torch.rand(self.args.batch_size, device='cuda', dtype=torch.float)
+            alpha = torch.rand(self.args.batch_size, device=self.d, dtype=torch.float)
             accept = alpha < torch.exp((energy - new_energy) / temperature)
             z[accept] = new_z[accept]
             contact_point_indices[accept] = new_contact_point_indices[accept]
@@ -115,7 +116,7 @@ class PhysicsGuide:
         step_size = 0.1
         temperature = 1e-3
         # update z by langevin
-        noise = torch.normal(mean=0, std=self.args.noise_size, size=z.shape, device='cuda', dtype=torch.float) * step_size
+        noise = torch.normal(mean=0, std=self.args.noise_size, size=z.shape, device=self.d, dtype=torch.float) * step_size
         new_z = z - 0.5 * grad / self.grad_ema.average.unsqueeze(0) * step_size * step_size + noise
         new_linear_independence, new_force_closure, new_surface_distance, new_penetration, new_z_norm, new_normal_alignment = self.compute_energy(new_z, contact_point_indices, verbose=True)
         new_energy = new_linear_independence + new_force_closure + new_surface_distance + new_penetration + new_z_norm + new_normal_alignment
@@ -123,7 +124,7 @@ class PhysicsGuide:
         self.grad_ema.apply(grad)
         with torch.no_grad():
             # metropolis-hasting
-            alpha = torch.rand(self.args.batch_size, device='cuda', dtype=torch.float)
+            alpha = torch.rand(self.args.batch_size, device=self.d, dtype=torch.float)
             accept = alpha < torch.exp((energy - new_energy) / temperature)
             z[accept] = new_z[accept]
             energy[accept] = new_energy[accept]

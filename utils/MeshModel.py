@@ -7,10 +7,11 @@ import pytorch_kinematics as pk
 import pytorch_volumetric as pv
 
 class MeshModel:
-  def __init__(self, path='data/sphere.stl', n_points=100):
+  def __init__(self, path='utils/sphere.stl', n_points=100):
 #n_handcode=6, root_rot_mode='ortho6d', robust_rot=False, flat_hand_mean=False,mano_path='data/mano', n_contact=3, scale=120
     #self.scale = scale
-    self.device = torch.device('cuda')
+    d = 'cuda' if torch.cuda.is_available() else 'cpu'
+    self.device = torch.device(d)
     device = self.device
     mesh = o3d.io.read_triangle_mesh(path)
     mesh.compute_vertex_normals()
@@ -26,8 +27,8 @@ class MeshModel:
   # get point cloud of object
   def get_vertices(self, hand_code):
     B = hand_code.shape[0]
-    x = hand_code[:,[4,6]] # B x 3
-    y = hand_code[:,[7,9]] # B x 3
+    x = hand_code[:,[3,4,5]] # B x 3
+    y = hand_code[:,[6,7,8]] # B x 3
     z = torch.cross(x, y, dim=1) # B x 3
     rot_mat = torch.stack((x,y,z), dim=1) # B x 3 x 3
     pts = self.pts.repeat(B, 1, 1) # B x N x 3
@@ -41,8 +42,8 @@ class MeshModel:
   # get normals
   def get_surface_normals(self, hand_code):
     B = hand_code.shape[0]
-    x = hand_code[:,[4,6]] # B x 3
-    y = hand_code[:,[7,9]] # B x 3
+    x = hand_code[:,[3,4,5]] # B x 3
+    y = hand_code[:,[6,7,8]] # B x 3
     z = torch.cross(x, y, dim=1) # B x 3
     rot_mat = torch.stack((x,y,z), dim=1) # B x 3 x 3
     norms = self.norms.repeat(B, 1, 1) # B x N x 3

@@ -3,8 +3,8 @@ import torch
 
 class FCLoss:
   def __init__(self, robot_model):
-
-    self.device = torch.device('cuda')
+    d = 'cuda' if torch.cuda.is_available() else 'cpu'
+    self.device = torch.device(d)
     device = self.device
     
     self.transformation_matrix = torch.tensor(np.array([[0,0,0,0,0,-1,0,1,0], [0,0,1,0,0,0,-1,0,0], [0,-1,0,1,0,0,0,0,0]])).float().to(device)
@@ -44,7 +44,7 @@ class FCLoss:
     Gt = G.transpose(1,2)
     temp = self.eps * self.eye6
     temp = torch.matmul(G, Gt) - temp
-    eigval = torch.symeig(temp.cpu(), eigenvectors=True)[0].to(self.device)
+    eigval = torch.view_as_real(torch.linalg.eigvals(temp)).select(1, 0).to(self.device)
     rnev = self.relu(-eigval)
     result = torch.sum(rnev * rnev, 1)
     return result
