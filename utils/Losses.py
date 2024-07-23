@@ -68,10 +68,10 @@ class FCLoss:
     right = torch.norm(normal, dim=2) / self.sqrt_sq_mu_1
     diff = left - right
     return torch.sum(self.relu(-diff), 1)
-  """
+  
   def dist_loss(self, x, z):
     d,g = self.robot_model.distandgrad(x, z)#.squeeze(-1)
-    return d * d
+    return d * d"""
   def fc_loss(self, x, normal):
     G = self.x_to_G(x)
     l8a = self.loss_8a(G)

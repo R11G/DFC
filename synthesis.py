@@ -3,24 +3,28 @@ import random
 
 import numpy as np
 import torch
+from datetime import datetime
+import time
 parser = argparse.ArgumentParser()
-parser.add_argument('--batch_size', default=1024, type=int)
+parser.add_argument('--batch_size', default=8, type=int)
 parser.add_argument('--n_contact', default=5, type=int)
-parser.add_argument('--max_physics', default=10000, type=int)
-parser.add_argument('--max_refine', default=1000, type=int)
+parser.add_argument('--max_physics', default=10, type=int)
+parser.add_argument('--max_refine', default=10, type=int)
 parser.add_argument('--hand_model', default='mano', type=str)
 parser.add_argument('--obj_model', default='sphere', type=str)
 parser.add_argument('--langevin_probability', default=0.85, type=float)
 parser.add_argument('--hprior_weight', default=1, type=float)
 parser.add_argument('--noise_size', default=0.1, type=float)
 parser.add_argument('--output_dir', default='synthesis', type=str)
+parser.add_argument('--n_pcd', default=1000, type=int)
 args = parser.parse_args()
 d = 'cuda' if torch.cuda.is_available() else 'cpu'
-# set random seeds
+# set random seeds. set to current time
 np.seterr(all='raise')
-random.seed(0)
-np.random.seed(0)
-torch.manual_seed(0)
+seed = int(round(datetime.now().timestamp()))
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
 
 from utils.MeshModel import MeshModel
 from utils.Losses import FCLoss
@@ -30,7 +34,7 @@ from utils.PhysicsGuide import PhysicsGuide
 
 # prepare models
 if args.obj_model == 'sphere':
-    mesh_model = MeshModel(n_points=100)
+    mesh_model = MeshModel(n_points=args.n_pcd)
 else:
     raise NotImplementedError()
 
@@ -42,47 +46,59 @@ penetration_model = PenetrationModel(mesh_model=mesh_model, robot_model=robot_mo
 physics_guide = PhysicsGuide(mesh_model, robot_model, penetration_model, fc_loss_model, args)
 
 accept_history = []
-
-z = torch.normal(0, 1, [args.batch_size, robot_model.code_length], device=d, dtype=torch.float32, requires_grad=True)
+fchist = []
+penhist = []
+disthist = []
+recordstep = 10
+#start = time.time()
+# config: B x (J+9) matrix with xyz translation vector, 2x xyz rotation vector, joint rotations
+config = torch.normal(0, 1, [args.batch_size, robot_model.code_length], device=d, dtype=torch.float32, requires_grad=True)
 contact_point_indices = torch.randint(0, mesh_model.n_pts, [args.batch_size, args.n_contact], device=d, dtype=torch.long)
 
 # optimize hand pose and contact map using physics guidance
-energy, grad, verbose_energy = physics_guide.initialize(z, contact_point_indices)
+energy, grad, verbose_energy = physics_guide.initialize(config, contact_point_indices)
 linear_independence, force_closure, surface_distance, penetration, z_norm, normal_alignment = verbose_energy
 accept = ((force_closure < 0.5) * (penetration < 0.02) * (surface_distance < 0.02)).float()
 for physics_step in range(args.max_physics):
-    energy, grad, z, contact_point_indices, verbose_energy = physics_guide.optimize(energy, grad, z, contact_point_indices, verbose_energy)
+    """end = time.time()
+    print(physics_step, end - start)
+    start = time.time()"""
+    energy, grad, config, contact_point_indices, verbose_energy = physics_guide.optimize(energy, grad, config, contact_point_indices, verbose_energy)
     linear_independence, force_closure, surface_distance, penetration, z_norm, normal_alignment = verbose_energy
-    val = (force_closure + penetration + surface_distance).float()
-    accept = ((force_closure < 0.5) * (penetration < 0.02) * (surface_distance < 0.02)).float()
-    _accept = accept.sum().detach().cpu().numpy()
-    accept_history.append(_accept)
+    #accept = ((force_closure < 0.5) * (penetration < 0.02) * (surface_distance < 0.02)).float()
+    #_accept = accept.sum().detach().cpu().numpy()
+    #accept_history.append(_accept)
+    if physics_step % recordstep == 0:
+        disthist.append(surface_distance.detach().clone().numpy())
+        penhist.append(penetration.detach().clone().numpy())
+        fchist.append(force_closure.detach().clone().numpy())
     if physics_step % 100 == 0:
-        print('optimize', physics_step, _accept, val)
+        #print('optimize', physics_step, _accept)
+        print('fc', force_closure.detach())
+        print('pen', penetration)
+        print('dist', surface_distance)
 
 for refinement_step in range(args.max_refine):
-    energy, grad, z, contact_point_indices, verbose_energy = physics_guide.refine(energy, grad, z, contact_point_indices, verbose_energy)
+    #print(refinement_step)
+    energy, grad, config, contact_point_indices, verbose_energy = physics_guide.refine(energy, grad, config, contact_point_indices, verbose_energy)
     linear_independence, force_closure, surface_distance, penetration, z_norm, normal_alignment = verbose_energy
-    val = (force_closure + penetration + surface_distance).float()
-    accept = ((force_closure < 0.5) * (penetration < 0.02) * (surface_distance < 0.02)).float()
+    """accept = ((force_closure < 0.5) * (penetration < 0.02) * (surface_distance < 0.02)).float()
     _accept = accept.sum().detach().cpu().numpy()
-    accept_history.append(_accept)
+    accept_history.append(_accept)"""
+    if physics_step % recordstep == 0:
+        disthist.append(surface_distance.detach().clone().numpy())
+        penhist.append(penetration.detach().clone().numpy())
+        fchist.append(force_closure.detach().clone().numpy())
     if refinement_step % 100 == 0:
-        print('refine', refinement_step, _accept, val)
+        #print('refine', refinement_step, _accept)
+        print('fc', force_closure.detach())
+        print('pen', penetration)
+        print('dist', surface_distance)
 
-
-#os.makedirs('%s/%s-%s-%d-%d'%(args.output_dir, args.hand_model, args.obj_model, args.n_contact, args.batch_size), exist_ok=True)
-# TODO: find new visualization tool to replace below
-"""
-for a in torch.where(accept)[0]:
-    a = a.detach().cpu().numpy()
-    hand_verts = physics_guide.hand_model.get_vertices(z)[a].detach().cpu().numpy()
-    hand_faces = physics_guide.hand_model.faces
-    if args.obj_model == "sphere":
-        sphere = tm.primitives.Sphere(radius=object_code[a].detach().cpu().numpy())
-        fig = go.Figure([utils.visualize_plotly.plot_hand(hand_verts, hand_faces), utils.visualize_plotly.plot_obj(sphere)])
-    else:
-        mesh = object_model.get_obj_mesh(object_idx[[a]].detach().cpu().numpy())
-        fig = go.Figure([utils.visualize_plotly.plot_hand(hand_verts, hand_faces), utils.visualize_plotly.plot_obj(mesh)])
-    fig.write_html('%s/%s-%s-%d-%d/fig-%d.html'%(args.output_dir, args.hand_model, args.obj_model, args.n_contact, args.batch_size, a))"""
-
+np.savetxt('dist.csv', np.array(disthist), delimiter=',')
+np.savetxt('fc.csv', np.array(fchist), delimiter=',')
+np.savetxt('pen.csv', np.array(penhist), delimiter=',')
+#np.savetxt('accept.csv', np.array(accept_history), delimiter=',')
+print('fc', force_closure.detach())
+print('pen', penetration)
+print('dist', surface_distance)

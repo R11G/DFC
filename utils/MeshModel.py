@@ -21,8 +21,8 @@ class MeshModel:
     self.sdf = pv.MeshSDF(self.sdf)
     self.n_pts = n_points
     self.pcd = mesh.sample_points_uniformly(number_of_points=n_points)
-    self.pts = torch.from_numpy(np.asarray(self.pcd.points)).float()
-    self.norms = torch.from_numpy(np.asarray(self.pcd.normals)).float()
+    self.pts = torch.from_numpy(np.asarray(self.pcd.points)).float().to(device)
+    self.norms = torch.from_numpy(np.asarray(self.pcd.normals)).float().to(device)
   
   # get point cloud of object
   def get_vertices(self, hand_code):

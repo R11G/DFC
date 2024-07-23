@@ -28,7 +28,7 @@ class PhysicsGuide:
         hand_verts = self.hand_model.get_vertices(z)
         contact_point = torch.gather(hand_verts, 1, torch.tile(contact_point_indices.unsqueeze(-1), [1,1,3]))
         contact_distance, contact_normal = self.object_model.distandgrad(contact_point, z)
-        # TODO: what did object code used to mean here
+        surface_distance = contact_distance * contact_distance
         contact_normal += torch.normal(0, self.epsilon, contact_normal.shape, device=contact_normal.device, dtype=contact_normal.dtype)
         contact_normal = contact_normal / torch.norm(contact_normal, dim=-1, keepdim=True)
         hand_normal = self.hand_model.get_surface_normals(z)
@@ -37,7 +37,6 @@ class PhysicsGuide:
         hand_normal = hand_normal / torch.norm(hand_normal, dim=-1, keepdim=True)    
         normal_alignment = 1 - ((hand_normal * contact_normal).sum(-1) + 1).sum(-1) / self.args.n_contact
         linear_independence, force_closure = self.fc_loss_model.fc_loss(contact_point, contact_normal)
-        surface_distance = self.fc_loss_model.dist_loss(contact_point,z)
         penetration = self.penetration_model.get_penetration(z) * 10  # B x V
         hand_prior = self.object_model.prior(z) * self.args.hprior_weight
         if verbose:
